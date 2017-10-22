@@ -1,0 +1,134 @@
+#!/bin/bash
+sed -i 's/^SELINUX=.*/SELINUX=disabled/' /etc/selinux/config
+setenforce 0
+sed -i 's/ONBOOT=yes/ONBOOT=no/' /etc/sysconfig/network-scripts/ifcfg-eth0
+sed -i '$a GATEWAY=192.168.0.10' /etc/sysconfig/network-scripts/ifcfg-eth1
+echo "/sbin/setenforce 0" >> /etc/rc.local
+chmod +x /etc/rc.local
+mkdir /yum
+mount -o loop /mnt/rhel7.1x86_64/isos/rhel-server-7.1-x86_64-dvd.iso /yum/
+cd /etc/yum.repos.d/
+find . -regex '.*\.repo$' -exec mv {} {}.back \;
+cat > /etc/yum.repos.d/local.repo << EOT
+[local]
+baseurl=file:///yum
+gpgcheck=0
+EOT
+yum clean all
+yum repolist
+
+#搭建DHCP
+yum -y install dhcp
+\cp /usr/share/doc/dhcp-4.2.5/dhcpd.conf.example /etc/dhcp/dhcpd.conf
+cat > /etc/dhcp/dhcpd.conf << EOT
+allown booting;
+allow bootp;
+option domain-name "pod16.example.com";
+option domain-name-servers 172.25.254.254;
+default-lease-time 600;
+max-lease-time 7200;
+log-facility local7;
+subent 192.168.0.0 netmask 255.255.255.0 {
+	range 192.168.0.50 192.168.0.60;
+	option routers 192.168.0.10;
+	option broadcast-address 192.168.0.255;
+	next-server 192.168.0.16;
+	filename "pxelinux.0";
+EOT
+dhcp -t & > /dev/null
+systemctl start dhcpd && echo "成功启动dhcp"
+yum -y install tftp-server
+yum -y install syslinux
+cp /usr/share/syslinux/pxelinux.0 /var/lib/tftpboot/
+cd /var/lib/tftpboot/
+mkdir pxelinux.cfg
+cd pxelinux.cfg
+touch default
+cat > default << EOT
+default	vesamenu.c32
+timeout 60
+display boot.msg
+menu background splash.jpg
+meni title Welcome to Global Learning Service Setup!
+lobel local
+	menu label Boot from ^local drive 
+	menu default
+	localhost 0xffff
+lobel install
+	menu label Install rhel7
+	kernel vmlinuz
+	append initrd=inird.img ks=http://192.168.0.16/myks.cfg
+EOT
+cd /mnt/rhel7.1/x86_64/dvd/isolinux
+cp splash.png vesamenu.c32 vmlinuz initrd.img /var/lib/tftpboot/
+sed -i 's/disable.*/disable=no/' /etc/xinetd.d/tftp
+systemctl start xinetd
+
+
+mkdir /var/www/html
+cat >  /var/www/html/myks.cfg <<EOT
+#version=RHEL7
+# System authorization information
+auth --enableshadow --passalgo=sha512
+# Reboot after in
+stallation 
+reboot 
+# 装完系统之后是否重启
+# Use network installation
+url --url="http://192.168.0.16/rhel7u1/"  # 网络安装介质所在位置
+# Use graphical install
+#graphical 
+text # 采用字符界面安装
+# Firewall configuration
+firewall --enabled --service=ssh  # 防火墙的配置
+firstboot --disable 
+ignoredisk --only-use=vda
+# Keyboard layouts
+# old format: keyboard us
+# new format:
+keyboard --vckeymap=us --xlayouts='us' # 键盘的配置
+# System language 
+lang en_US.UTF-8 # 语言制式的设置
+# Network information
+network  --bootproto=dhcp # 网络设置
+network  --hostname=localhost.localdomain
+#repo --name="Server-ResilientStorage" --baseurl=http://download.eng.bos.redhat.com/rel-eng/latest-RHEL-7/compose/Server/x86_64/os//addons/ResilientStorage
+# Root password
+rootpw --iscrypted nope 
+# SELinux configuration
+selinux --disabled
+# System services
+services --disabled="kdump,rhsmcertd" --enabled="network,sshd,rsyslog,ovirt-guest-agent,chronyd"
+# System timezone
+timezone Asia/Shanghai --isUtc
+# System bootloader configuration
+bootloader --append="console=tty0 crashkernel=auto" --location=mbr --timeout=1 --boot-drive=vda 
+
+# 设置boot loader安装选项 --append指定内核参数 --location 设定引导记录的位置
+# Clear the Master Boot Record
+zerombr # 清空MBR
+# Partition clearing information
+clearpart --all --initlabel # 清空分区信息
+# Disk partitioning information
+part / --fstype="xfs" --ondisk=vda --size=6144 # 设置根目录的分区情况
+%post # 装完系统后执行脚本部分
+echo "redhat" | passwd --stdin root
+useradd carol
+echo "redhat" | passwd --stdin carol
+# workaround anaconda requirements
+%end
+
+%packages # 需要安装的软件包
+@core
+%end
+EOT
+
+yum -y install httpd
+cp /root/myks.cfg /var/www/html/myks.cfg
+ln -s /yum/ /var/www/html/rhel7u1
+
+service httpd start
+systemctl start httpd
+systemctl enable xinetd
+systemctl enable httpd
+systemctl enable dhcpd
