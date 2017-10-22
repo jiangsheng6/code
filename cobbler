@@ -1,0 +1,51 @@
+#!/bin/bash
+echo "开始配置"
+sed -i 's/^SELINUX=.*/SELINUX=disabled/' /etc/selinux/config
+setenforce 0
+sed -i 's/ONBOOT=yes/ONBOOT=no/' /etc/sysconfig/network-scripts/ifcfg-eth0
+sed -i '$a GATEWAY=192.168.0.10' /etc/sysconfig/network-scripts/ifcfg-eth1
+service network restart && echo "网络配置完成"
+echo "正在下载软件"
+wget -r ftp://172.25.254.250/notes/project/software/cobbler_rhel7/ /root/cobbler & > /dev/null && echo "开始安装"
+cd /root/172.25.254.250/notes/project/software/cobbler_rhel7
+rpm -ivh python2-simplejson-3.10.0-1.el7.x86_64.rpm  python-django-1.6.11.6-1.el7.noarch.rpm python-django-bash-completion-1.6.11.6-1.el7.noarch.rpm
+yum localinstall cobbler-2.8.1-2.el7.x86_64.rpm cobbler-web-2.8.1-2.el7.noarch.rpm
+systemctl start cobblerd && echo "安装并成功启动cobblerd"
+systemctl start httpd  && echo "安装并成功启动http"
+systemctl enable httpd & > /dev/null
+systemctl enable cobblerd & > /dev/null
+
+sed -i 's/.*server: 127.0.0.1/server: 192.168.0.11/' /etc/cobbler/settings
+
+sed -i 's/disable.*/disable=no/' /etc/xinetd.d/tftp && echo "成功激活tftp服务"
+yum -y install syslinux &>/dev/null
+systemctl start rsyncd && echo "成功启动rsyncd服务"
+systemctl enable rsyncd
+
+yum -y install pykickstart
+sed -i 's/^default_password_crypted.*/default_password_crypted: "$1$random-p$MvGDzDfse5HkTwXB2OLNb."/' /etc/cobbler/settings
+
+yum -y install fence-agents
+
+mkdir /yum
+mount -t nfs 172.25.254.250:/content /mnt/
+mount -o loop /mnt/rhel7.2/x86_64/isos/rhel-server-7.2-x86_64-dvd.iso /yum/ & > /dev/null
+echo "正在下载镜像"
+cobbler import --path=/yum --name=rhel-server-7.2-base --arch=x86_64
+echo "下载成功"
+
+yum -y install dhcp
+
+sed -i 's/^subnet.*/subnet 192.168.0.0 netmask 255.255.255.0 {/' /etc/cobbler/dhcp.template
+
+sed -i 's/.*192.168.1.5.*/     option routers             192.168.0.10;/' /etc/cobbler/dhcp.template
+
+sed -i 's/.*option domain-name-servers.*/     option domain-name-servers 172.25.254.254;/' /etc/cobbler/dhcp.template
+
+sed -i 's/.*range dynamic-bootp.*/     range dynamic-bootp        192.168.0.100 192.168.0.150;/' /etc/cobbler/dhcp.template
+
+sed -i 's/.*manage_dhcp: 0.*/manage_dhcp: 1/' /etc/cobbler/dhcp.template
+
+systemctl restart cobblerd && echo "重启cobblerd成功"
+/usr/bin/cobbler sync & >/dev/null
+systemctl restart xinetd && echo "配置完成，可以使用。"
