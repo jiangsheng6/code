@@ -1,0 +1,62 @@
+#一台机子rsync
+#一台机子sersync
+#两个脚本配合
+
+#第一个rsync
+#/bin/bash
+read -p "请输入本机 ip  :" ip
+read -p "请输入  :" ip
+yum -y install rsync
+cat > /etc/rsyncd.conf  << ENO
+uid=nginx
+gid=nginx
+use chroot=no
+address=$ip
+port 873
+log file=/var/log/rsyncd.log
+pid file=/var/run/rsyncd.pid
+host allow=172.25.254.0/24
+
+[wphp]
+        path=/usr/share/nginx/wphp.com
+        comment= web wphp share with rsync
+        read only=no
+        dont compress=*.gz *.bz2 *.tgz *.rar *.zip
+        auth users=root
+        secrets file=/etc/rsyncd_user.pass
+ENO
+
+echo "root:admin" > /etc/rsyncd_user.pass
+ chmod 600 /etc/rsyncd_user.pass
+ rsync  --daemon
+
+
+#第二个脚本
+#/bin/bash
+tar -xf sersync2.5.4_64bit_binary_stable_final.tar.gz  -C /opt/
+cd /opt/
+mv GNU-Linux-x86/ sersync
+
+#修改confxml配置文件
+
+sed -i 's/<localpath watch.*/<localpath watch="\/root\/wphp">' /opt/sersync/confxml.xml
+sed -i 's/<!--<remote ip="192.168.8.39.*/<remote ip="172.25.254.14" name="wphp"\/>/' /opt/sersync/confxml.xml
+sed -i 's/<auth start="flase"/<auth start="true"/' /opt/sersync/confxml.xml
+
+cd
+mkdir wphp
+ ./sersync2 -d -r -n 12 -o ./confxml.xml 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
